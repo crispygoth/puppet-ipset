@@ -15,6 +15,8 @@
 # @param firewall_service
 #   An optional service name. if provided, the ipsets will be configured before this. So your firewall will depend on the chains. The name should end with `.service`. This is only supported on systemd-based Operating Systems
 #
+# @param manage_service
+#   Boolean to enable/disable the management of the ipset service
 class ipset (
   Array[String[1]] $packages,
   String[1] $service,
@@ -23,6 +25,7 @@ class ipset (
   Enum['present', 'absent', 'latest'] $package_ensure,
   Stdlib::Absolutepath $config_path,
   Optional[Pattern[/\.service$/]] $firewall_service = undef,
+  Boolean $manage_service = true,
 ){
   package{$ipset::packages:
     ensure => $package_ensure,
@@ -49,36 +52,38 @@ class ipset (
     source => "puppet:///modules/${module_name}/ipset_init",
   }
 
-  # configure custom unit file
-  case $facts['service_provider'] {
-    'systemd': {
-      systemd::unit_file{"${service}.service":
-        enable    => $enable,
-        active    => $service_ensure,
-        content   => epp("${module_name}/ipset.service.epp",{
-          'firewall_service' => $firewall_service,
-          'config_path'      => $config_path,
-          }),
-        subscribe => [File['/usr/local/bin/ipset_init'], File['/usr/local/bin/ipset_sync']],
+  if $manage_service {
+    # configure custom unit file
+    case $facts['service_provider'] {
+      'systemd': {
+        systemd::unit_file{"${service}.service":
+          enable    => $enable,
+          active    => $service_ensure,
+          content   => epp("${module_name}/ipset.service.epp",{
+            'firewall_service' => $firewall_service,
+            'config_path'      => $config_path,
+            }),
+          subscribe => [File['/usr/local/bin/ipset_init'], File['/usr/local/bin/ipset_sync']],
+        }
       }
-    }
-    'redhat': {
-      file{'/etc/init.d/ipset':
-        ensure  => 'file',
-        mode    => '0755',
-        content => epp("${module_name}/init.redhat.epp", {
-          'config_path' => $config_path
-          }
-        ),
-        require => Package[$ipset::packages],
+      'redhat': {
+        file{'/etc/init.d/ipset':
+          ensure  => 'file',
+          mode    => '0755',
+          content => epp("${module_name}/init.redhat.epp", {
+            'config_path' => $config_path
+            }
+          ),
+          require => Package[$ipset::packages],
+        }
+        -> service{'ipset':
+          ensure => 'running',
+          enable => true,
+        }
       }
-      -> service{'ipset':
-        ensure => 'running',
-        enable => true,
+      default: {
+        fail('The ipset module only supports systemd and RedHat 6 based distributions')
       }
-    }
-    default: {
-      fail('The ipset module only supports systemd and RedHat 6 based distributions')
     }
   }
 }
